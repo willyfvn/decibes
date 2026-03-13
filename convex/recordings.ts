@@ -55,6 +55,15 @@ export const getActiveRecording = query({
   },
 });
 
+export const getRecording = query({
+  args: {
+    recordingId: v.id("recordings"),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.recordingId);
+  },
+});
+
 export const getRecordings = query({
   args: {
     roomName: v.string(),

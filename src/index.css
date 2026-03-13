@@ -1,1 +1,11 @@
 @import "tailwindcss";
+
+body {
+  font-family: 'Outfit', system-ui, sans-serif;
+  background: #ffffff;
+  color: #1a1a1a;
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono', monospace;
+}

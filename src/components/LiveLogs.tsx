@@ -15,8 +15,8 @@ export default function LiveLogs() {
   const readings = useQuery(api.readings.getRecentReadings);
 
   return (
-    <div className="rounded-2xl border border-neutral-700 bg-neutral-900 p-4 flex flex-col h-full">
-      <h2 className="text-sm font-semibold text-neutral-400 uppercase tracking-wider mb-3">
+    <div className="rounded-2xl border border-neutral-200 bg-white p-4 flex flex-col h-full shadow-sm">
+      <h2 className="text-sm font-semibold text-neutral-500 uppercase tracking-wider mb-3">
         Live Logs
       </h2>
 
@@ -24,22 +24,22 @@ export default function LiveLogs() {
         {readings?.map((r) => (
           <div
             key={r._id}
-            className="flex justify-between text-neutral-300 px-1"
+            className="flex justify-between text-neutral-700 px-1"
           >
             <span>
-              {r.value.toFixed(1)} <span className="text-neutral-500">dB</span>
+              {r.value.toFixed(1)} <span className="text-neutral-400">dB</span>
             </span>
-            <span className="text-neutral-500">{formatTime(r.timestamp)}</span>
+            <span className="text-neutral-400">{formatTime(r.timestamp)}</span>
           </div>
         ))}
         {(!readings || readings.length === 0) && (
-          <div className="text-neutral-600 text-xs">No readings yet...</div>
+          <div className="text-neutral-400 text-xs">No readings yet...</div>
         )}
       </div>
 
       <Link
         to="/history"
-        className="mt-3 text-center text-sm text-emerald-400 hover:text-emerald-300 transition-colors"
+        className="mt-3 text-center text-sm text-emerald-600 hover:text-emerald-500 transition-colors"
       >
         View History →
       </Link>

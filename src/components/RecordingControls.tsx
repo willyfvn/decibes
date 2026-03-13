@@ -2,13 +2,15 @@ import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { useRef, useState } from "react";
 import { Id } from "../../convex/_generated/dataModel";
+import fixWebmDuration from "fix-webm-duration";
 
 interface RecordingControlsProps {
   roomName: string;
   mediaStream: MediaStream | null;
+  onStopLive?: () => Promise<void> | void;
 }
 
-export default function RecordingControls({ roomName, mediaStream }: RecordingControlsProps) {
+export default function RecordingControls({ roomName, mediaStream, onStopLive }: RecordingControlsProps) {
   const [recording, setRecording] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -62,60 +64,68 @@ export default function RecordingControls({ roomName, mediaStream }: RecordingCo
   const handleStop = async () => {
     const recorder = recorderRef.current;
     const recordingId = recordingIdRef.current;
-    if (!recorder || !recordingId) return;
 
-    setRecording(false);
-    setUploading(true);
-    setUploadProgress(0);
-    setError(null);
-
-    try {
-      // Stop and wait for final data
-      await new Promise<void>((resolve) => {
-        recorder.onstop = () => resolve();
-        recorder.stop();
-      });
-
-      const durationMs = Date.now() - startTimeRef.current;
-      const blob = new Blob(chunksRef.current, { type: recorder.mimeType });
-
-      // Get presigned S3 upload URL
-      const { uploadUrl, s3Key } = await getUploadUrl({
-        recordingId,
-        contentType: blob.type,
-      });
-
-      // Upload directly to S3 with progress tracking
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open("PUT", uploadUrl);
-        xhr.setRequestHeader("Content-Type", blob.type);
-
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-            setUploadProgress(Math.round((e.loaded / e.total) * 100));
-          }
-        };
-
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) resolve();
-          else reject(new Error(`Upload failed: ${xhr.status}`));
-        };
-        xhr.onerror = () => reject(new Error("Upload failed"));
-
-        xhr.send(blob);
-      });
-
-      await finishRecordingMut({ recordingId, s3Key, durationMs });
-    } catch (err) {
-      setError((err as Error).message);
-      await failRecordingMut({ recordingId });
-    } finally {
-      setUploading(false);
+    // If we have a local recorder, stop it and upload
+    if (recorder && recordingId) {
+      setRecording(false);
+      setUploading(true);
       setUploadProgress(0);
-      recorderRef.current = null;
-      recordingIdRef.current = null;
-      chunksRef.current = [];
+      setError(null);
+
+      try {
+        await new Promise<void>((resolve) => {
+          recorder.onstop = () => resolve();
+          recorder.stop();
+        });
+
+        const durationMs = Date.now() - startTimeRef.current;
+        const rawBlob = new Blob(chunksRef.current, { type: recorder.mimeType });
+        const blob = await fixWebmDuration(rawBlob, durationMs, { logger: false });
+
+        const { uploadUrl, s3Key } = await getUploadUrl({
+          recordingId,
+          contentType: blob.type,
+        });
+
+        await new Promise<void>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("PUT", uploadUrl);
+          xhr.setRequestHeader("Content-Type", blob.type);
+
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+              setUploadProgress(Math.round((e.loaded / e.total) * 100));
+            }
+          };
+
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) resolve();
+            else reject(new Error(`Upload failed: ${xhr.status}`));
+          };
+          xhr.onerror = () => reject(new Error("Upload failed"));
+
+          xhr.send(blob);
+        });
+
+        await finishRecordingMut({ recordingId, s3Key, durationMs });
+      } catch (err) {
+        setError((err as Error).message);
+        await failRecordingMut({ recordingId });
+      } finally {
+        setUploading(false);
+        setUploadProgress(0);
+        recorderRef.current = null;
+        recordingIdRef.current = null;
+        chunksRef.current = [];
+      }
+    } else if (activeRecording) {
+      // Stale DB recording with no local recorder — mark it failed
+      await failRecordingMut({ recordingId: activeRecording._id });
+    }
+
+    // Also stop the live stream
+    if (onStopLive) {
+      await onStopLive();
     }
   };
 
@@ -124,18 +134,18 @@ export default function RecordingControls({ roomName, mediaStream }: RecordingCo
   return (
     <div className="flex items-center gap-2">
       {uploading ? (
-        <span className="text-yellow-400 text-xs font-medium">
+        <span className="text-amber-600 text-xs font-medium">
           Uploading... {uploadProgress}%
         </span>
       ) : isRecording ? (
         <>
-          <span className="flex items-center gap-1.5 text-red-400 text-xs font-medium">
+          <span className="flex items-center gap-1.5 text-red-500 text-xs font-medium">
             <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
             Recording
           </span>
           <button
             onClick={handleStop}
-            className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-600 hover:bg-red-700 text-white transition-colors"
+            className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500 hover:bg-red-600 text-white transition-colors"
           >
             Stop Recording
           </button>
@@ -144,12 +154,12 @@ export default function RecordingControls({ roomName, mediaStream }: RecordingCo
         <button
           onClick={handleStart}
           disabled={!mediaStream}
-          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-neutral-700 hover:bg-neutral-600 text-white disabled:opacity-50 transition-colors"
+          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-neutral-100 hover:bg-neutral-200 text-neutral-700 border border-neutral-200 disabled:opacity-50 transition-colors"
         >
-          Start Recording
+          Record
         </button>
       )}
-      {error && <span className="text-red-400 text-[10px]">{error}</span>}
+      {error && <span className="text-red-500 text-[10px]">{error}</span>}
     </div>
   );
 }
