@@ -1,8 +1,10 @@
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Id } from "../../convex/_generated/dataModel";
 import fixWebmDuration from "fix-webm-duration";
+
+const ROTATION_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
 
 interface RecordingControlsProps {
   roomName: string;
@@ -15,11 +17,24 @@ export default function RecordingControls({ roomName, mediaStream, onStopLive }:
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [segmentIndex, setSegmentIndex] = useState(0);
+  const [uploadingPrevSegment, setUploadingPrevSegment] = useState(false);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const recordingIdRef = useRef<Id<"recordings"> | null>(null);
   const startTimeRef = useRef<number>(0);
+  const sessionIdRef = useRef<string | null>(null);
+  const segmentIndexRef = useRef(0);
+  const rotationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isRotatingRef = useRef(false);
+  const segmentStartTimeRef = useRef<number>(0);
+  const mediaStreamRef = useRef(mediaStream);
+
+  // Keep mediaStream ref current
+  useEffect(() => {
+    mediaStreamRef.current = mediaStream;
+  }, [mediaStream]);
 
   const activeRecording = useQuery(api.recordings.getActiveRecording, { roomName });
   const startRecordingMut = useMutation(api.recordings.startRecording);
@@ -27,45 +42,189 @@ export default function RecordingControls({ roomName, mediaStream, onStopLive }:
   const failRecordingMut = useMutation(api.recordings.failRecording);
   const getUploadUrl = useAction(api.s3.getUploadUrl);
 
+  // Store mutation/action refs so interval callbacks always use latest
+  const startRecordingMutRef = useRef(startRecordingMut);
+  const finishRecordingMutRef = useRef(finishRecordingMut);
+  const failRecordingMutRef = useRef(failRecordingMut);
+  const getUploadUrlRef = useRef(getUploadUrl);
+
+  useEffect(() => { startRecordingMutRef.current = startRecordingMut; }, [startRecordingMut]);
+  useEffect(() => { finishRecordingMutRef.current = finishRecordingMut; }, [finishRecordingMut]);
+  useEffect(() => { failRecordingMutRef.current = failRecordingMut; }, [failRecordingMut]);
+  useEffect(() => { getUploadUrlRef.current = getUploadUrl; }, [getUploadUrl]);
+
+  const getMimeType = () =>
+    MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
+      ? "video/webm;codecs=vp9"
+      : "video/webm";
+
+  async function startNewRecorder(): Promise<{
+    recorder: MediaRecorder;
+    recordingId: Id<"recordings">;
+    chunks: Blob[];
+    startTime: number;
+  }> {
+    const stream = mediaStreamRef.current;
+    if (!stream) throw new Error("No media stream");
+
+    const sessionId = sessionIdRef.current!;
+    const idx = segmentIndexRef.current;
+
+    const recordingId = await startRecordingMutRef.current({
+      roomName,
+      sessionId,
+      segmentIndex: idx,
+    });
+
+    const chunks: Blob[] = [];
+    const mimeType = getMimeType();
+    const recorder = new MediaRecorder(stream, { mimeType });
+
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunks.push(e.data);
+    };
+    recorder.onerror = () => {
+      setError("Recording failed");
+      setRecording(false);
+      failRecordingMutRef.current({ recordingId });
+    };
+
+    recorder.start(1000);
+    const startTime = Date.now();
+
+    return { recorder, recordingId, chunks, startTime };
+  }
+
+  async function uploadSegment(
+    recorder: MediaRecorder,
+    recordingId: Id<"recordings">,
+    chunks: Blob[],
+    segStartTime: number,
+    options?: { showMainProgress?: boolean },
+  ) {
+    const showMain = options?.showMainProgress ?? false;
+
+    try {
+      // Only stop if still recording
+      if (recorder.state === "recording") {
+        await new Promise<void>((resolve) => {
+          recorder.onstop = () => resolve();
+          recorder.stop();
+        });
+      }
+
+      const durationMs = Date.now() - segStartTime;
+      const rawBlob = new Blob(chunks, { type: recorder.mimeType });
+      const blob = await fixWebmDuration(rawBlob, durationMs, { logger: false });
+
+      const { uploadUrl, s3Key } = await getUploadUrlRef.current({
+        recordingId,
+        contentType: blob.type,
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("PUT", uploadUrl);
+        xhr.setRequestHeader("Content-Type", blob.type);
+
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable && showMain) {
+            setUploadProgress(Math.round((e.loaded / e.total) * 100));
+          }
+        };
+
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve();
+          else reject(new Error(`Upload failed: ${xhr.status}`));
+        };
+        xhr.onerror = () => reject(new Error("Upload failed"));
+
+        xhr.send(blob);
+      });
+
+      await finishRecordingMutRef.current({ recordingId, s3Key, durationMs });
+    } catch (err) {
+      console.error("Segment upload failed:", err);
+      await failRecordingMutRef.current({ recordingId });
+      throw err;
+    }
+  }
+
+  async function rotate() {
+    if (isRotatingRef.current || !mediaStreamRef.current) return;
+    isRotatingRef.current = true;
+
+    const oldRecorder = recorderRef.current;
+    const oldRecordingId = recordingIdRef.current;
+    const oldChunks = [...chunksRef.current]; // snapshot
+    const oldStartTime = segmentStartTimeRef.current;
+
+    try {
+      // Start new segment FIRST (overlap, no gap)
+      segmentIndexRef.current += 1;
+      const newSeg = await startNewRecorder();
+
+      recorderRef.current = newSeg.recorder;
+      recordingIdRef.current = newSeg.recordingId;
+      chunksRef.current = newSeg.chunks;
+      segmentStartTimeRef.current = newSeg.startTime;
+      setSegmentIndex(segmentIndexRef.current);
+
+      // Upload old segment in background
+      if (oldRecorder && oldRecordingId) {
+        setUploadingPrevSegment(true);
+        uploadSegment(oldRecorder, oldRecordingId, oldChunks, oldStartTime)
+          .catch(() => {/* already handled in uploadSegment */})
+          .finally(() => setUploadingPrevSegment(false));
+      }
+    } catch (err) {
+      setError("Rotation failed: " + (err as Error).message);
+    } finally {
+      isRotatingRef.current = false;
+    }
+  }
+
+  // Store rotate in a ref so setInterval always calls the latest version
+  const rotateRef = useRef(rotate);
+  useEffect(() => {
+    rotateRef.current = rotate;
+  });
+
   const handleStart = async () => {
     if (!mediaStream) return;
     setError(null);
 
     try {
-      const recordingId = await startRecordingMut({ roomName });
-      recordingIdRef.current = recordingId;
-      startTimeRef.current = Date.now();
-      chunksRef.current = [];
+      sessionIdRef.current = crypto.randomUUID();
+      segmentIndexRef.current = 0;
 
-      const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
-        ? "video/webm;codecs=vp9"
-        : "video/webm";
-
-      const recorder = new MediaRecorder(mediaStream, { mimeType });
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-      recorder.onerror = () => {
-        setError("Recording failed");
-        setRecording(false);
-        if (recordingIdRef.current) {
-          failRecordingMut({ recordingId: recordingIdRef.current });
-        }
-      };
-
-      recorder.start(1000);
-      recorderRef.current = recorder;
+      const seg = await startNewRecorder();
+      recorderRef.current = seg.recorder;
+      recordingIdRef.current = seg.recordingId;
+      chunksRef.current = seg.chunks;
+      startTimeRef.current = seg.startTime;
+      segmentStartTimeRef.current = seg.startTime;
+      setSegmentIndex(0);
       setRecording(true);
+
+      rotationTimerRef.current = setInterval(() => {
+        rotateRef.current();
+      }, ROTATION_INTERVAL_MS);
     } catch (err) {
       setError((err as Error).message);
     }
   };
 
   const handleStop = async () => {
+    // Clear rotation timer
+    if (rotationTimerRef.current) {
+      clearInterval(rotationTimerRef.current);
+      rotationTimerRef.current = null;
+    }
+
     const recorder = recorderRef.current;
     const recordingId = recordingIdRef.current;
 
-    // If we have a local recorder, stop it and upload
     if (recorder && recordingId) {
       setRecording(false);
       setUploading(true);
@@ -73,61 +232,54 @@ export default function RecordingControls({ roomName, mediaStream, onStopLive }:
       setError(null);
 
       try {
-        await new Promise<void>((resolve) => {
-          recorder.onstop = () => resolve();
-          recorder.stop();
-        });
-
-        const durationMs = Date.now() - startTimeRef.current;
-        const rawBlob = new Blob(chunksRef.current, { type: recorder.mimeType });
-        const blob = await fixWebmDuration(rawBlob, durationMs, { logger: false });
-
-        const { uploadUrl, s3Key } = await getUploadUrl({
+        await uploadSegment(
+          recorder,
           recordingId,
-          contentType: blob.type,
-        });
-
-        await new Promise<void>((resolve, reject) => {
-          const xhr = new XMLHttpRequest();
-          xhr.open("PUT", uploadUrl);
-          xhr.setRequestHeader("Content-Type", blob.type);
-
-          xhr.upload.onprogress = (e) => {
-            if (e.lengthComputable) {
-              setUploadProgress(Math.round((e.loaded / e.total) * 100));
-            }
-          };
-
-          xhr.onload = () => {
-            if (xhr.status >= 200 && xhr.status < 300) resolve();
-            else reject(new Error(`Upload failed: ${xhr.status}`));
-          };
-          xhr.onerror = () => reject(new Error("Upload failed"));
-
-          xhr.send(blob);
-        });
-
-        await finishRecordingMut({ recordingId, s3Key, durationMs });
+          chunksRef.current,
+          segmentStartTimeRef.current,
+          { showMainProgress: true },
+        );
       } catch (err) {
         setError((err as Error).message);
-        await failRecordingMut({ recordingId });
       } finally {
         setUploading(false);
         setUploadProgress(0);
         recorderRef.current = null;
         recordingIdRef.current = null;
         chunksRef.current = [];
+        sessionIdRef.current = null;
       }
     } else if (activeRecording) {
-      // Stale DB recording with no local recorder — mark it failed
       await failRecordingMut({ recordingId: activeRecording._id });
     }
 
-    // Also stop the live stream
     if (onStopLive) {
       await onStopLive();
     }
   };
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (rotationTimerRef.current) {
+        clearInterval(rotationTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Visibility change: rotate if overdue when tab regains focus
+  useEffect(() => {
+    const handler = () => {
+      if (document.visibilityState === "visible" && segmentStartTimeRef.current && recorderRef.current) {
+        const elapsed = Date.now() - segmentStartTimeRef.current;
+        if (elapsed >= ROTATION_INTERVAL_MS) {
+          rotateRef.current();
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", handler);
+    return () => document.removeEventListener("visibilitychange", handler);
+  }, []);
 
   const isRecording = recording || !!activeRecording;
 
@@ -141,8 +293,11 @@ export default function RecordingControls({ roomName, mediaStream, onStopLive }:
         <>
           <span className="flex items-center gap-1.5 text-red-500 text-xs font-medium">
             <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-            Recording
+            Recording{segmentIndex > 0 ? ` (segment ${segmentIndex + 1})` : ""}
           </span>
+          {uploadingPrevSegment && (
+            <span className="text-amber-600 text-[10px]">Uploading previous segment...</span>
+          )}
           <button
             onClick={handleStop}
             className="px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500 hover:bg-red-600 text-white transition-colors"

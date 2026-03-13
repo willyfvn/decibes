@@ -24,7 +24,7 @@ export default function LiveLogs() {
         {readings?.map((r) => (
           <div
             key={r._id}
-            className="flex justify-between text-neutral-700 px-1"
+            className="flex justify-between text-neutral-700 px-1 animate-flash"
           >
             <span>
               {r.value.toFixed(1)} <span className="text-neutral-400">dB</span>

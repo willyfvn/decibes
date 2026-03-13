@@ -4,12 +4,16 @@ import { mutation, query } from "./_generated/server";
 export const startRecording = mutation({
   args: {
     roomName: v.string(),
+    sessionId: v.optional(v.string()),
+    segmentIndex: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     return await ctx.db.insert("recordings", {
       roomName: args.roomName,
       startedAt: Date.now(),
       status: "recording",
+      sessionId: args.sessionId,
+      segmentIndex: args.segmentIndex,
     });
   },
 });
@@ -75,6 +79,19 @@ export const getRecordings = query({
       .filter((q) => q.eq(q.field("status"), "done"))
       .order("desc")
       .take(20);
+  },
+});
+
+export const getSessionRecordings = query({
+  args: {
+    sessionId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const recordings = await ctx.db
+      .query("recordings")
+      .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
+      .collect();
+    return recordings.sort((a, b) => (a.segmentIndex ?? 0) - (b.segmentIndex ?? 0));
   },
 });
 

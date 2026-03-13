@@ -17,5 +17,9 @@ export default defineSchema({
     stoppedAt: v.optional(v.number()),
     durationMs: v.optional(v.number()),
     status: v.string(), // "recording" | "uploading" | "done" | "error"
-  }).index("by_room", ["roomName"]),
+    sessionId: v.optional(v.string()),
+    segmentIndex: v.optional(v.number()),
+  })
+    .index("by_room", ["roomName"])
+    .index("by_session", ["sessionId"]),
 });

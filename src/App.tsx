@@ -20,8 +20,13 @@ function MainView() {
 
 function WatchView() {
   return (
-    <div className="min-h-screen bg-white text-neutral-900 p-6 flex flex-col items-center justify-center">
-      <LiveStream />
+    <div className="min-h-screen bg-white text-neutral-900 p-6 flex flex-col items-center">
+      <div className="w-full max-w-6xl grid grid-cols-1 md:grid-cols-[1fr_320px] gap-6 h-[80vh]">
+        <div className="flex flex-col items-center justify-center gap-4">
+          <LiveStream />
+        </div>
+        <LiveLogs />
+      </div>
     </div>
   );
 }

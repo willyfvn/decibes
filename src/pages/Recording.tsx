@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAction, useQuery } from "convex/react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useNavigate } from "react-router-dom";
 import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
 
@@ -24,17 +24,35 @@ function formatDuration(ms: number) {
 
 export default function Recording() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const recording = useQuery(api.recordings.getRecording, {
     recordingId: id as Id<"recordings">,
   });
+  const sessionRecordings = useQuery(
+    api.recordings.getSessionRecordings,
+    recording?.sessionId ? { sessionId: recording.sessionId } : "skip",
+  );
   const getDownloadUrl = useAction(api.s3.getDownloadUrl);
   const [url, setUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    setUrl(null);
+  }, [id]);
 
   useEffect(() => {
     if (recording?.s3Key && !url) {
       getDownloadUrl({ s3Key: recording.s3Key }).then(setUrl);
     }
-  }, [recording]);
+  }, [recording, url]);
+
+  const totalSegments = sessionRecordings?.length ?? 0;
+  const currentSegmentIndex = recording?.segmentIndex ?? 0;
+  const prevSegment = sessionRecordings?.find(
+    (r) => (r.segmentIndex ?? 0) === currentSegmentIndex - 1,
+  );
+  const nextSegment = sessionRecordings?.find(
+    (r) => (r.segmentIndex ?? 0) === currentSegmentIndex + 1,
+  );
 
   return (
     <div className="min-h-screen bg-white text-neutral-900 p-6 flex flex-col items-center">
@@ -54,11 +72,18 @@ export default function Recording() {
               <h1 className="text-2xl font-bold">
                 {formatTime(recording.startedAt)}
               </h1>
-              {recording.durationMs && (
-                <div className="text-sm text-neutral-400 mt-1">
-                  {formatDuration(recording.durationMs)}
-                </div>
-              )}
+              <div className="flex items-center gap-3 mt-1">
+                {recording.durationMs && (
+                  <span className="text-sm text-neutral-400">
+                    {formatDuration(recording.durationMs)}
+                  </span>
+                )}
+                {totalSegments > 1 && (
+                  <span className="text-xs bg-neutral-100 text-neutral-500 rounded px-2 py-0.5">
+                    Segment {currentSegmentIndex + 1} of {totalSegments}
+                  </span>
+                )}
+              </div>
             </div>
 
             {url ? (
@@ -85,6 +110,27 @@ export default function Recording() {
                     }}
                   />
                 </div>
+
+                {/* Segment navigation */}
+                {totalSegments > 1 && (
+                  <div className="flex items-center gap-3">
+                    <button
+                      disabled={!prevSegment}
+                      onClick={() => prevSegment && navigate(`/recording/${prevSegment._id}`)}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium bg-neutral-100 hover:bg-neutral-200 text-neutral-700 border border-neutral-200 disabled:opacity-30 transition-colors"
+                    >
+                      ← Previous Segment
+                    </button>
+                    <button
+                      disabled={!nextSegment}
+                      onClick={() => nextSegment && navigate(`/recording/${nextSegment._id}`)}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium bg-neutral-100 hover:bg-neutral-200 text-neutral-700 border border-neutral-200 disabled:opacity-30 transition-colors"
+                    >
+                      Next Segment →
+                    </button>
+                  </div>
+                )}
+
                 <a
                   href={url}
                   download

@@ -45,6 +45,18 @@ export default function History() {
 
   const recordings = useQuery(api.recordings.getRecordings, { roomName: ROOM_NAME });
 
+  // Count segments per session for badge display
+  const sessionCounts = useMemo(() => {
+    if (!recordings) return {};
+    const counts: Record<string, number> = {};
+    for (const r of recordings) {
+      if (r.sessionId) {
+        counts[r.sessionId] = (counts[r.sessionId] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }, [recordings]);
+
   return (
     <div className="min-h-screen bg-white text-neutral-900 p-6 flex flex-col items-center">
       <div className="w-full max-w-3xl">
@@ -154,8 +166,13 @@ export default function History() {
                 to={`/recording/${r._id}`}
                 className="flex justify-between items-center bg-neutral-50 hover:bg-neutral-100 rounded px-3 py-2 transition-colors"
               >
-                <span className="text-sm text-neutral-700">
+                <span className="text-sm text-neutral-700 flex items-center gap-2">
                   {formatTime(r.startedAt)}
+                  {r.sessionId && sessionCounts[r.sessionId] > 1 && (
+                    <span className="text-[10px] bg-neutral-200 text-neutral-500 rounded px-1.5 py-0.5">
+                      Part {(r.segmentIndex ?? 0) + 1} of {sessionCounts[r.sessionId]}
+                    </span>
+                  )}
                 </span>
                 {r.durationMs && (
                   <span className="text-xs text-neutral-400">
