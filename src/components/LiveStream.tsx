@@ -51,8 +51,7 @@ export default function LiveStream() {
   return (
     <div className="flex flex-col items-center gap-4">
       <div
-        className="relative rounded-xl overflow-hidden border border-neutral-200 bg-neutral-50"
-        style={{ width: 480, height: 360 }}
+        className="relative rounded-xl overflow-hidden border border-neutral-200 bg-neutral-50 w-full max-w-[480px] aspect-[4/3]"
       >
         <video
           ref={videoRef}
