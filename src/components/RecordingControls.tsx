@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Id } from "../../convex/_generated/dataModel";
 import fixWebmDuration from "fix-webm-duration";
 
-const ROTATION_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
+const ROTATION_INTERVAL_MS = 30 * 1000; // 30 seconds (testing)
 
 interface RecordingControlsProps {
   roomName: string;
