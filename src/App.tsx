@@ -4,6 +4,7 @@ import WebcamCapture from "./components/WebcamCapture";
 import LiveStream from "./components/LiveStream";
 import History from "./pages/History";
 import Recording from "./pages/Recording";
+import Session from "./pages/Session";
 
 function MainView() {
   return (
@@ -49,6 +50,7 @@ export default function App() {
         <Route path="/watch" element={<WatchView />} />
         <Route path="/history" element={<History />} />
         <Route path="/recording/:id" element={<Recording />} />
+        <Route path="/session/:sessionId" element={<Session />} />
       </Routes>
     </BrowserRouter>
   );

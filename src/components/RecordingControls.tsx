@@ -19,6 +19,7 @@ export default function RecordingControls({ roomName, mediaStream, onStopLive }:
   const [error, setError] = useState<string | null>(null);
   const [segmentIndex, setSegmentIndex] = useState(0);
   const [uploadingPrevSegment, setUploadingPrevSegment] = useState(false);
+  const [segmentRemaining, setSegmentRemaining] = useState(ROTATION_INTERVAL_MS);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -67,6 +68,10 @@ export default function RecordingControls({ roomName, mediaStream, onStopLive }:
     const stream = mediaStreamRef.current;
     if (!stream) throw new Error("No media stream");
 
+    // Clone the stream so MediaRecorder gets its own tracks
+    // (LiveKit may take ownership of the original tracks)
+    const clonedStream = stream.clone();
+
     const sessionId = sessionIdRef.current!;
     const idx = segmentIndexRef.current;
 
@@ -78,7 +83,7 @@ export default function RecordingControls({ roomName, mediaStream, onStopLive }:
 
     const chunks: Blob[] = [];
     const mimeType = getMimeType();
-    const recorder = new MediaRecorder(stream, { mimeType });
+    const recorder = new MediaRecorder(clonedStream, { mimeType });
 
     recorder.ondataavailable = (e) => {
       if (e.data.size > 0) chunks.push(e.data);
@@ -112,6 +117,9 @@ export default function RecordingControls({ roomName, mediaStream, onStopLive }:
           recorder.stop();
         });
       }
+
+      // Stop cloned tracks to avoid leaks
+      recorder.stream.getTracks().forEach((t) => t.stop());
 
       const durationMs = Date.now() - segStartTime;
       const rawBlob = new Blob(chunks, { type: recorder.mimeType });
@@ -207,9 +215,12 @@ export default function RecordingControls({ roomName, mediaStream, onStopLive }:
       setSegmentIndex(0);
       setRecording(true);
 
+      // Check every 30s if rotation is due — browsers throttle long intervals in background tabs
       rotationTimerRef.current = setInterval(() => {
-        rotateRef.current();
-      }, ROTATION_INTERVAL_MS);
+        if (segmentStartTimeRef.current && Date.now() - segmentStartTimeRef.current >= ROTATION_INTERVAL_MS) {
+          rotateRef.current();
+        }
+      }, 30_000);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -258,6 +269,24 @@ export default function RecordingControls({ roomName, mediaStream, onStopLive }:
     }
   };
 
+  const isRecording = recording || !!activeRecording;
+
+  // Countdown timer for segment remaining time
+  useEffect(() => {
+    if (!isRecording || !segmentStartTimeRef.current) {
+      setSegmentRemaining(ROTATION_INTERVAL_MS);
+      return;
+    }
+    // Tick immediately, then every second
+    const tick = () => {
+      const elapsed = Date.now() - segmentStartTimeRef.current;
+      setSegmentRemaining(Math.max(0, ROTATION_INTERVAL_MS - elapsed));
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [isRecording, segmentIndex]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -281,8 +310,6 @@ export default function RecordingControls({ roomName, mediaStream, onStopLive }:
     return () => document.removeEventListener("visibilitychange", handler);
   }, []);
 
-  const isRecording = recording || !!activeRecording;
-
   return (
     <div className="flex items-center gap-2">
       {uploading ? (
@@ -294,6 +321,9 @@ export default function RecordingControls({ roomName, mediaStream, onStopLive }:
           <span className="flex items-center gap-1.5 text-red-500 text-xs font-medium">
             <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
             Recording{segmentIndex > 0 ? ` (segment ${segmentIndex + 1})` : ""}
+            <span className="text-neutral-400 font-normal tabular-nums">
+              {Math.floor(segmentRemaining / 60000)}:{String(Math.floor((segmentRemaining % 60000) / 1000)).padStart(2, "0")}
+            </span>
           </span>
           {uploadingPrevSegment && (
             <span className="text-amber-600 text-[10px]">Uploading previous segment...</span>

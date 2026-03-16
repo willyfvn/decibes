@@ -77,7 +77,12 @@ export function useLiveKit(options?: UseLiveKitOptions) {
         const videoTrack = mediaStream.getVideoTracks()[0];
         if (videoTrack) {
           const localTrack = new LocalVideoTrack(videoTrack);
-          await room.localParticipant.publishTrack(localTrack);
+          await room.localParticipant.publishTrack(localTrack, {
+            videoEncoding: {
+              maxBitrate: 1_500_000,
+              maxFramerate: 30,
+            },
+          });
         }
       }
     },

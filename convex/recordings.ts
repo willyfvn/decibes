@@ -78,7 +78,7 @@ export const getRecordings = query({
       .withIndex("by_room", (q) => q.eq("roomName", args.roomName))
       .filter((q) => q.eq(q.field("status"), "done"))
       .order("desc")
-      .take(20);
+      .take(100);
   },
 });
 

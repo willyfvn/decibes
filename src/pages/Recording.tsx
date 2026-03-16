@@ -79,8 +79,8 @@ export default function Recording() {
                   </span>
                 )}
                 {totalSegments > 1 && (
-                  <span className="text-xs bg-neutral-100 text-neutral-500 rounded px-2 py-0.5">
-                    Segment {currentSegmentIndex + 1} of {totalSegments}
+                  <span className="text-xs text-neutral-400">
+                    {currentSegmentIndex + 1} / {totalSegments}
                   </span>
                 )}
               </div>
