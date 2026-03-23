@@ -28,6 +28,23 @@ export const getRecentReadings = query({
   },
 });
 
+export const getReadingsInRange = query({
+  args: {
+    startTime: v.number(),
+    endTime: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("readings")
+      .withIndex("by_timestamp", (idx) => {
+        const q = idx.gte("timestamp", args.startTime);
+        return args.endTime !== undefined ? q.lte("timestamp", args.endTime) : q;
+      })
+      .order("asc")
+      .take(8640);
+  },
+});
+
 export const getReadingsPaginated = query({
   args: {
     paginationOpts: paginationOptsValidator,

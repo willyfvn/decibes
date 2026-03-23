@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Link } from "react-router-dom";
 import LiveLogs from "./components/LiveLogs";
+import LiveGraph from "./components/LiveGraph";
 import WebcamCapture from "./components/WebcamCapture";
 import LiveStream from "./components/LiveStream";
 import History from "./pages/History";
@@ -36,7 +37,7 @@ function WatchView() {
         <div className="flex flex-col items-center justify-center gap-4">
           <LiveStream />
         </div>
-        <LiveLogs />
+        <LiveGraph />
       </div>
     </div>
   );
