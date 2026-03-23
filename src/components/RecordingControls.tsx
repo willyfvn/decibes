@@ -10,9 +10,10 @@ interface RecordingControlsProps {
   roomName: string;
   mediaStream: MediaStream | null;
   onStopLive?: () => Promise<void> | void;
+  autoStart?: boolean;
 }
 
-export default function RecordingControls({ roomName, mediaStream, onStopLive }: RecordingControlsProps) {
+export default function RecordingControls({ roomName, mediaStream, onStopLive, autoStart }: RecordingControlsProps) {
   const [recording, setRecording] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -286,6 +287,15 @@ export default function RecordingControls({ roomName, mediaStream, onStopLive }:
     const timer = setInterval(tick, 1000);
     return () => clearInterval(timer);
   }, [isRecording, segmentIndex]);
+
+  // Auto-start recording when autoStart prop is true
+  const autoStartedRef = useRef(false);
+  useEffect(() => {
+    if (autoStart && mediaStream && !recording && !autoStartedRef.current) {
+      autoStartedRef.current = true;
+      handleStart();
+    }
+  }, [autoStart, mediaStream, recording]);
 
   // Cleanup on unmount
   useEffect(() => {

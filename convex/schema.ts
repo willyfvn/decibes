@@ -22,4 +22,10 @@ export default defineSchema({
   })
     .index("by_room", ["roomName"])
     .index("by_session", ["sessionId"]),
+
+  devices: defineTable({
+    deviceId: v.string(),
+    status: v.string(), // "online" | "offline"
+    lastSeen: v.number(),
+  }).index("by_deviceId", ["deviceId"]),
 });

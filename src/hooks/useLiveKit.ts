@@ -14,6 +14,7 @@ const LIVEKIT_URL = import.meta.env.VITE_LIVEKIT_URL as string;
 interface UseLiveKitOptions {
   onRemoteTrack?: (track: MediaStreamTrack, participant: RemoteParticipant) => void;
   onRemoteTrackRemoved?: (participant: RemoteParticipant) => void;
+  autoReconnect?: boolean;
 }
 
 export function useLiveKit(options?: UseLiveKitOptions) {
@@ -23,9 +24,21 @@ export function useLiveKit(options?: UseLiveKitOptions) {
     Map<string, MediaStreamTrack>
   >(new Map());
 
+  const tokenRef = useRef<string | null>(null);
+  const mediaStreamRef = useRef<MediaStream | undefined>(undefined);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const intentionalDisconnectRef = useRef(false);
+
   const connect = useCallback(
     async (token: string, mediaStream?: MediaStream) => {
       if (roomRef.current) return;
+
+      // Store for reconnection
+      tokenRef.current = token;
+      mediaStreamRef.current = mediaStream;
+      intentionalDisconnectRef.current = false;
+      reconnectAttemptRef.current = 0;
 
       const room = new Room({
         adaptiveStream: true,
@@ -35,11 +48,29 @@ export function useLiveKit(options?: UseLiveKitOptions) {
         },
       });
 
-      room.on(RoomEvent.Connected, () => setIsConnected(true));
+      room.on(RoomEvent.Connected, () => {
+        setIsConnected(true);
+        reconnectAttemptRef.current = 0;
+      });
+
       room.on(RoomEvent.Disconnected, () => {
         setIsConnected(false);
         roomRef.current = null;
         setRemoteVideoTracks(new Map());
+
+        // Auto-reconnect if enabled and not intentionally disconnected
+        if (options?.autoReconnect && !intentionalDisconnectRef.current && tokenRef.current) {
+          const attempt = reconnectAttemptRef.current;
+          const delay = Math.min(5000 * Math.pow(2, attempt), 60000); // 5s, 10s, 20s, 40s, 60s cap
+          console.log(`LiveKit disconnected. Reconnecting in ${delay / 1000}s (attempt ${attempt + 1})...`);
+          reconnectAttemptRef.current = attempt + 1;
+
+          reconnectTimeoutRef.current = setTimeout(() => {
+            if (tokenRef.current && !intentionalDisconnectRef.current) {
+              connect(tokenRef.current, mediaStreamRef.current);
+            }
+          }, delay);
+        }
       });
 
       room.on(
@@ -90,6 +121,11 @@ export function useLiveKit(options?: UseLiveKitOptions) {
   );
 
   const disconnect = useCallback(async () => {
+    intentionalDisconnectRef.current = true;
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
     if (roomRef.current) {
       await roomRef.current.disconnect();
       roomRef.current = null;

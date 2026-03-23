@@ -6,6 +6,7 @@ import RecordingControls from "./RecordingControls";
 
 const OCR_INTERVAL_MS = 10000;
 const SAVE_INTERVAL_MS = 10000;
+const HEARTBEAT_INTERVAL_MS = 30000;
 
 interface CropRegion {
   x: number;
@@ -15,6 +16,13 @@ interface CropRegion {
 }
 
 const ROOM_NAME = "decibes-main";
+
+function getAutoStartParams() {
+  const params = new URLSearchParams(window.location.search);
+  const autostart = params.get("autostart") === "true";
+  const deviceId = params.get("deviceId") || "pi-default";
+  return { autostart, deviceId };
+}
 
 export default function WebcamCapture() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -37,7 +45,10 @@ export default function WebcamCapture() {
   const [selecting, setSelecting] = useState(false);
   const [goingLive, setGoingLive] = useState(false);
   const [watchUrlCopied, setWatchUrlCopied] = useState(false);
+  const [autoStartReady, setAutoStartReady] = useState(false);
   const dragStart = useRef<{ x: number; y: number } | null>(null);
+
+  const { autostart, deviceId } = getAutoStartParams();
 
   const addReading = useMutation(api.readings.addReading);
   const addReadingRef = useRef(addReading);
@@ -47,8 +58,14 @@ export default function WebcamCapture() {
   const readDisplayRef = useRef(readDisplay);
   readDisplayRef.current = readDisplay;
 
+  const heartbeatMut = useMutation(api.devices.heartbeat);
+  const heartbeatRef = useRef(heartbeatMut);
+  heartbeatRef.current = heartbeatMut;
+
   const generateToken = useAction(api.livekit.generateToken);
-  const { isConnected: isLive, connect: connectLiveKit, disconnect: disconnectLiveKit } = useLiveKit();
+  const { isConnected: isLive, connect: connectLiveKit, disconnect: disconnectLiveKit } = useLiveKit({
+    autoReconnect: autostart,
+  });
 
   const busyRef = useRef(false);
   const lastSaveRef = useRef(0);
@@ -166,6 +183,62 @@ export default function WebcamCapture() {
     setLogging(false);
     setLastOcr(null);
   }, [disconnectLiveKit]);
+
+  // Autostart sequence: capture → go live → recording starts via autoStart prop
+  const autoStartedRef = useRef(false);
+  useEffect(() => {
+    if (!autostart || autoStartedRef.current) return;
+    autoStartedRef.current = true;
+
+    (async () => {
+      console.log("[autostart] Starting capture...");
+      setError(null);
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 480 },
+        });
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+          setStreaming(true);
+          if (cropSaved) {
+            if (intervalRef.current) clearInterval(intervalRef.current);
+            intervalRef.current = setInterval(performOcr, OCR_INTERVAL_MS);
+            setLogging(true);
+          }
+        }
+
+        console.log("[autostart] Going live...");
+        const token = await generateToken({
+          roomName: ROOM_NAME,
+          participantName: "broadcaster",
+          canPublish: true,
+        });
+        await connectLiveKit(token, stream);
+
+        console.log("[autostart] Live! Recording will auto-start.");
+        setAutoStartReady(true);
+      } catch (err) {
+        console.error("[autostart] Failed:", err);
+        setError((err as Error).message);
+      }
+    })();
+  }, [autostart]);
+
+  // Heartbeat: send device status every 30 seconds in autostart mode
+  useEffect(() => {
+    if (!autostart) return;
+
+    // Send immediately
+    heartbeatRef.current({ deviceId }).catch(console.warn);
+
+    const timer = setInterval(() => {
+      heartbeatRef.current({ deviceId }).catch(console.warn);
+    }, HEARTBEAT_INTERVAL_MS);
+
+    return () => clearInterval(timer);
+  }, [autostart, deviceId]);
 
   // Crop selection — drag on video
   const handleMouseDown = useCallback(
@@ -302,7 +375,12 @@ export default function WebcamCapture() {
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             Live
           </span>
-          <RecordingControls roomName={ROOM_NAME} mediaStream={streamRef.current} onStopLive={disconnectLiveKit} />
+          <RecordingControls
+            roomName={ROOM_NAME}
+            mediaStream={streamRef.current}
+            onStopLive={disconnectLiveKit}
+            autoStart={autoStartReady}
+          />
         </div>
       )}
 

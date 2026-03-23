@@ -8,7 +8,8 @@
     "build": "tsc -b tsconfig.app.json tsconfig.node.json && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "capture": "npx tsx capture/index.ts"
+    "capture": "npx tsx capture/index.ts",
+    "pi:install": "bash scripts/pi-install.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

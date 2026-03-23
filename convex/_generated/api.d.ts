@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as devices from "../devices.js";
 import type * as livekit from "../livekit.js";
 import type * as ocr from "../ocr.js";
 import type * as readings from "../readings.js";
@@ -21,6 +22,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  devices: typeof devices;
   livekit: typeof livekit;
   ocr: typeof ocr;
   readings: typeof readings;
